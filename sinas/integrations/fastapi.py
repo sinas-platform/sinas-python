@@ -48,9 +48,11 @@ from sinas import SinasAPIError, SinasAuthError, SinasClient
 
 
 class LoginRequest(BaseModel):
-    """Login request body."""
+    """Login request body. `password` is required for instances running in
+    `password` or `password+otp` auth modes; ignored otherwise."""
 
     email: EmailStr
+    password: Optional[str] = None
 
 
 class VerifyOTPRequest(BaseModel):
@@ -255,9 +257,13 @@ class SinasAuth:
 
         @router.post("/login")
         async def login(request: LoginRequest) -> Dict[str, Any]:
-            """Initiate login by sending OTP to email."""
+            """Initiate login. Forwards `email` (and `password`, if supplied)
+            to the upstream Sinas instance. The response shape varies by the
+            instance's AUTH_MODE — see `AuthAPI.login` docstring."""
             try:
-                return await asyncio.to_thread(base_client.auth.login, request.email)
+                return await asyncio.to_thread(
+                    base_client.auth.login, request.email, request.password
+                )
             except SinasAPIError as e:
                 raise HTTPException(
                     status_code=e.status_code or status.HTTP_500_INTERNAL_SERVER_ERROR,

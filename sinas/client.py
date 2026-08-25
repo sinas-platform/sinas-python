@@ -5,11 +5,14 @@ from typing import Any, Dict, Iterator, Optional
 
 import httpx
 
+from sinas.agents import AgentsAPI
 from sinas.auth import AuthAPI
+from sinas.batches import BatchesAPI
 from sinas.chats import ChatsAPI
 from sinas.executions import ExecutionsAPI
 from sinas.exceptions import SinasAPIError, SinasAuthError, SinasNotFoundError, SinasValidationError
 from sinas.files import FilesAPI
+from sinas.functions import FunctionsAPI
 from sinas.state import StateAPI
 from sinas.templates import TemplatesAPI
 from sinas.webhooks import WebhooksAPI
@@ -51,6 +54,9 @@ class SinasClient:
         self.chats = ChatsAPI(self)
         self.webhooks = WebhooksAPI(self)
         self.executions = ExecutionsAPI(self)
+        self.functions = FunctionsAPI(self)
+        self.agents = AgentsAPI(self)
+        self.batches = BatchesAPI(self)
         self.templates = TemplatesAPI(self)
         self.files = FilesAPI(self)
 

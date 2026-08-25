@@ -16,15 +16,20 @@ if ! command -v twine &> /dev/null; then
     exit 1
 fi
 
-# Check if dist files exist
-if [ ! -f "dist/sinas-0.1.0-py3-none-any.whl" ]; then
-    echo "Error: Package not built. Run 'python3 -m build' first"
+# Resolve current version from pyproject.toml so this script works for any release.
+VERSION=$(python3 -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+WHEEL="dist/sinas-${VERSION}-py3-none-any.whl"
+SDIST="dist/sinas-${VERSION}.tar.gz"
+
+if [ ! -f "$WHEEL" ] || [ ! -f "$SDIST" ]; then
+    echo "Error: built artifacts for ${VERSION} not found in dist/."
+    echo "Run: rm -rf dist/ build/ *.egg-info && python3 -m build"
     exit 1
 fi
 
 # Validate packages
-echo "Validating packages..."
-twine check dist/*
+echo "Validating packages for sinas ${VERSION}..."
+twine check "$WHEEL" "$SDIST"
 if [ $? -ne 0 ]; then
     echo "Error: Package validation failed"
     exit 1
@@ -38,7 +43,7 @@ if [ "$TARGET" == "test" ]; then
     echo "Uploading to TEST PyPI..."
     echo "You will need your Test PyPI API token"
     echo ""
-    twine upload --repository testpypi dist/*
+    twine upload --repository testpypi "$WHEEL" "$SDIST"
     echo ""
     echo "✅ Uploaded to Test PyPI!"
     echo "Test installation with:"
@@ -57,7 +62,7 @@ elif [ "$TARGET" == "prod" ]; then
     echo "Uploading to PRODUCTION PyPI..."
     echo "You will need your PyPI API token"
     echo ""
-    twine upload dist/*
+    twine upload "$WHEEL" "$SDIST"
     echo ""
     echo "✅ Uploaded to PyPI!"
     echo "Install with: pip install sinas"
