@@ -21,6 +21,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The FastAPI chat router's list endpoint passes `include_archived`, `q`,
     `limit` and `cursor` through and returns `X-Next-Cursor`/`X-Truncated`.
 
+- **Deferred turns (Sinas 0.5.0).** An agent can stop a turn to ask the user
+  (`askUser`) or wait for background work, also in synchronous calls.
+  - `client.chats.invoke()` and `client.chats.send()` return `status`
+    (`TurnStatus`: `completed`, `input_required`, `in_progress`, `injected`),
+    `pending_inputs` and `channel_id`, and `usage` (the request's LLM calls,
+    tokens and cost). Against older servers the SDK fills in the defaults
+    (`completed`, `[]`, `None`, `None`).
+  - `client.chats.list_pending_inputs(chat_id)` lists open questions.
+  - `client.chats.answer(chat_id, tool_call_id, answer, wait=False)` answers
+    one. Without `wait` it returns the 202 `PendingInputAnswerAccepted`
+    (`resumed`, `resume_pending`, `channel_id`); with `wait=True` the resumed
+    turn's `PendingInputAnswerResult` (`status`, `reply`, `message`,
+    `pending_inputs`, `channel_id`, `usage`).
+  - `client.chats.approve_tool(chat_id, tool_call_id, approved, always_allow=False)`
+    approves or rejects a tool call; returns `resume` (`waiting` or `queued`)
+    and the round's `channel_id`.
+  - `client.chats.stream_events(chat_id, content, include_thinking=False)`
+    streams a turn as `StreamEvent`s (event name plus decoded data), so
+    `input_required`, `round_suspended`, `approval_required` and `done`
+    (`completed` or `suspended`) can be told apart. `stream()` is unchanged.
+  - `client.chats.follow_channel(chat_id, channel_id, last_id="0", include_thinking=False)`
+    streams a turn from its channel (`GET /chats/{id}/stream/{channel_id}`).
+  - Response types (`InvokeResult`, `MessageSendResult`, `PendingInput`,
+    `TurnUsage`, ...) are exported as `TypedDict`s; responses are still
+    plain dicts.
+
 ### Changed
 
 - Sinas 0.5.0 caps `GET /chats` without `limit` or `cursor` at
