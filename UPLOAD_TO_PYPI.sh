@@ -17,7 +17,28 @@ if ! command -v twine &> /dev/null; then
 fi
 
 # Resolve current version from pyproject.toml so this script works for any release.
-VERSION=$(python3 -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+# tomllib is Python 3.11+; on older interpreters fall back to reading the
+# [project] table's version line, so any python3 can run this script.
+read_version() {
+python3 - <<'PY'
+import pathlib
+import re
+import sys
+
+text = pathlib.Path("pyproject.toml").read_text()
+try:
+    import tomllib
+except ImportError:
+    table = re.search(r"^\[project\][ \t]*$(.*?)(?=^\[|\Z)", text, re.M | re.S)
+    match = table and re.search(r"""^version\s*=\s*["']([^"']+)["']""", table.group(1), re.M)
+    if not match:
+        sys.exit("Error: could not read [project].version from pyproject.toml")
+    print(match.group(1))
+else:
+    print(tomllib.loads(text)["project"]["version"])
+PY
+}
+VERSION=$(read_version)
 WHEEL="dist/sinas-${VERSION}-py3-none-any.whl"
 SDIST="dist/sinas-${VERSION}.tar.gz"
 
