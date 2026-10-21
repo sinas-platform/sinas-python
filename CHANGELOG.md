@@ -5,19 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-10-21
+
+Upgrade if you use the FastAPI integration (see Security). Calls that existed
+in 0.2.x need no newer server. Chat pagination, the deferred-turn fields and
+approvals need Sinas 0.5.0; against older servers the SDK falls back to the
+defaults documented below.
+
+### Security
+
+- **FastAPI integration: request clients no longer inherit the process's
+  credentials.** `SinasClient` falls back to the `SINAS_API_KEY` /
+  `SINAS_TOKEN` environment variables when it gets no credentials. The
+  FastAPI integration built its per-request clients that way. In an app that
+  sets `SINAS_API_KEY` for its own background work and mounts `SinasAuth`
+  with `auto_error=False`, an anonymous request to the generated
+  `GET /auth/me` was therefore sent with the service key and answered with
+  the service account's id, email and roles. A frontend that reads `/me`
+  then showed a logged-in session to a visitor who never signed in.
+  - New `SinasClient(..., use_env=True)`. With `use_env=False` a client
+    never reads credentials from the environment. The default keeps the
+    current behaviour for service clients.
+  - The FastAPI integration now builds its anonymous client, its per-user
+    client (the caller's token and nothing else), the client behind its
+    login, OTP, refresh and logout routes, and the anonymous file-serve
+    route's client with `use_env=False`.
+  - Any app of your own that builds a `SinasClient` for an end user (or for
+    no user) in a process with these variables set should pass
+    `use_env=False` too.
 
 ### Added
 
-- **Chat list pagination.** `client.chats.list()` takes `q`, `limit` and
-  `cursor`; with `limit` or `cursor` it returns one page.
+- **Chat list pagination (Sinas 0.5.0).** `client.chats.list()` takes `q`,
+  `limit` and `cursor`; with `limit` or `cursor` it returns one page.
   - `client.chats.list_page(limit=50, cursor=None, ...)` returns a `ChatPage`
     (`chats`, `next_cursor`, `truncated`), the cursor taken from the server's
     `X-Next-Cursor` header.
   - `client.chats.iter_all(page_size=200, ...)` iterates over every chat,
     following `X-Next-Cursor`. Against a server from before pagination, the
     first response holds every chat without a cursor, so it yields them all
-    and stops.
+    and stops. It raises `SinasAPIError` if the server returns a cursor it
+    has already followed, instead of looping.
   - The FastAPI chat router's list endpoint passes `include_archived`, `q`,
     `limit` and `cursor` through and returns `X-Next-Cursor`/`X-Truncated`.
 
@@ -26,9 +54,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `client.chats.invoke()` and `client.chats.send()` return `status`
     (`TurnStatus`: `completed`, `input_required`, `in_progress`, `injected`),
     `pending_inputs` and `channel_id`, and `usage` (the request's LLM calls,
-    tokens and cost). Against older servers the SDK fills in the defaults
-    (`completed`, `[]`, `None`, `None`).
+    tokens and cost). Against servers before 0.5.0 the SDK fills in the
+    defaults (`completed`, `[]`, `None`, `None`).
   - `client.chats.list_pending_inputs(chat_id)` lists open questions.
+    This and `answer()` call endpoints that are new in Sinas 0.5.0.
   - `client.chats.answer(chat_id, tool_call_id, answer, wait=False)` answers
     one. Without `wait` it returns the 202 `PendingInputAnswerAccepted`
     (`resumed`, `resume_pending`, `channel_id`); with `wait=True` the resumed
@@ -36,7 +65,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `pending_inputs`, `channel_id`, `usage`).
   - `client.chats.approve_tool(chat_id, tool_call_id, approved, always_allow=False)`
     approves or rejects a tool call; returns `resume` (`waiting` or `queued`)
-    and the round's `channel_id`.
+    and the round's `channel_id`. `always_allow`, `waiting` and `channel_id`
+    need Sinas 0.5.0; a server before 0.5.0 resumes on every decision, so the
+    SDK reports `resume` as `queued` there.
   - `client.chats.stream_events(chat_id, content, include_thinking=False)`
     streams a turn as `StreamEvent`s (event name plus decoded data), so
     `input_required`, `round_suspended`, `approval_required` and `done`
@@ -54,6 +85,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   them still makes that request, and now emits a `UserWarning` when the
   server says it cut the list short (`X-Truncated: true`). Use `iter_all()`
   to get every chat.
+
+### Fixed
+
+- `import sinas` failed on Python 3.8 with a `TypeError`:
+  `functions.submit_batch()` annotated `inputs` as `list[...]`, which
+  Python 3.8 cannot evaluate. It now uses `typing.List`.
 
 ## [0.2.0] - 2026-05-15
 
