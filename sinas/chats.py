@@ -1,16 +1,56 @@
 """Runtime Chats API."""
 
+import json
 import warnings
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Set, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    Iterator,
+    List,
+    Literal,
+    Optional,
+    Set,
+    Union,
+    cast,
+    overload,
+)
 
+from sinas.chat_types import (
+    InvokeResult,
+    MessageSendResult,
+    PendingInput,
+    PendingInputAnswerAccepted,
+    PendingInputAnswerResult,
+    StreamEvent,
+    ToolApprovalResult,
+)
 from sinas.exceptions import SinasAPIError
 
 if TYPE_CHECKING:
-    from sinas.client import SinasClient
+    from sinas.client import ServerSentEvent, SinasClient
 
 # The largest page GET /chats serves.
 CHATS_PAGE_MAX = 200
+
+
+def _with_turn_state(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Fill in the turn-state fields a server before Sinas 0.5.0 leaves out,
+    with the values a 0.5.0 server sends for a turn that simply completed."""
+    data.setdefault("status", "completed")
+    data.setdefault("pending_inputs", [])
+    data.setdefault("channel_id", None)
+    data.setdefault("usage", None)
+    return data
+
+
+def _stream_event(sse: "ServerSentEvent") -> StreamEvent:
+    try:
+        data: Any = json.loads(sse.data)
+    except ValueError:
+        data = sse.data
+    return StreamEvent(event=sse.event, data=data, id=sse.id)
 
 
 @dataclass
@@ -44,11 +84,18 @@ class ChatsAPI:
         session_key: Optional[str] = None,
         reset: bool = False,
         input: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+    ) -> InvokeResult:
         """Invoke an agent synchronously — send a message, get a reply.
 
         Combines chat creation and message sending into a single request/response.
         Use session_key for conversation continuity across multiple calls.
+
+        Check ``status`` before using ``reply``: a turn can end without a
+        final reply. ``"input_required"`` means the agent asked a question
+        (``pending_inputs``; answer it with ``answer()``), ``"in_progress"``
+        that background work outlasted the request (follow ``channel_id``
+        with ``follow_channel()``), and ``"injected"`` that the session's
+        chat was busy, so the message went into the turn already there.
 
         Args:
             namespace: Agent namespace.
@@ -59,7 +106,8 @@ class ChatsAPI:
             input: Optional agent input variables (only used when creating a new chat).
 
         Returns:
-            Dict with reply, chat_id, session_key, and usage.
+            An InvokeResult: reply, chat_id, session_key, usage (the LLM
+            usage of this invoke), status, pending_inputs and channel_id.
         """
         data: Dict[str, Any] = {"message": message}
         if session_key is not None:
@@ -69,11 +117,12 @@ class ChatsAPI:
         if input is not None:
             data["input"] = input
 
-        return self._client._request(
+        result = self._client._request(
             "POST",
             f"/agents/{namespace}/{agent_name}/invoke",
             json=data,
         )
+        return cast(InvokeResult, _with_turn_state(result))
 
     def create(
         self,
@@ -113,21 +162,29 @@ class ChatsAPI:
         self,
         chat_id: str,
         content: Union[str, List[Dict[str, Any]]],
-    ) -> Dict[str, Any]:
+    ) -> MessageSendResult:
         """Send message to chat and get response (blocking).
+
+        A turn that waits on background work is followed to its reply within
+        the chat's job timeout. Check ``status``: with ``"input_required"``
+        the returned message is the assistant message that asked, and
+        ``pending_inputs`` holds the questions (answer with ``answer()``);
+        see ``invoke()`` for the other statuses.
 
         Args:
             chat_id: Chat ID (UUID).
             content: Message content (string or list of content blocks).
 
         Returns:
-            Message response from the agent.
+            A MessageSendResult: the message's fields plus usage, status,
+            pending_inputs and channel_id.
         """
-        return self._client._request(
+        result = self._client._request(
             "POST",
             f"/chats/{chat_id}/messages",
             json={"content": content}
         )
+        return cast(MessageSendResult, _with_turn_state(result))
 
     def stream(
         self,
@@ -141,13 +198,217 @@ class ChatsAPI:
             content: Message content (string or list of content blocks).
 
         Yields:
-            Server-sent event data chunks.
+            Server-sent event data chunks. Event names are not included; use
+            ``stream_events()`` to tell ``input_required``, ``done`` and the
+            other events apart.
         """
         return self._client._stream(
             "POST",
             f"/chats/{chat_id}/messages/stream",
             json={"content": content}
         )
+
+    def stream_events(
+        self,
+        chat_id: str,
+        content: Union[str, List[Dict[str, Any]]],
+        *,
+        include_thinking: bool = False,
+    ) -> Iterator[StreamEvent]:
+        """Send a message to a chat and stream the turn as parsed events.
+
+        Each StreamEvent has the SSE event name and its decoded JSON data.
+        Content arrives in ``"message"`` events. When the agent asks the user
+        something, the stream sends ``"input_required"`` (the question),
+        then ``"round_suspended"`` (with the round's ``channel_id``), and
+        ends with ``"done"`` ``{"status": "suspended"}``: answer with
+        ``answer()``, and follow the channel it returns. A round waiting on a
+        background run keeps the stream open until the run's continuation
+        is done. Heartbeat pings are skipped.
+
+        Args:
+            chat_id: Chat ID (UUID).
+            content: Message content (string or list of content blocks).
+            include_thinking: Send the model's thinking text in
+                ``data["thinking"]`` (otherwise only an empty ``thinking``
+                when the model starts thinking).
+
+        Yields:
+            StreamEvents, until ``"done"`` or ``"error"``.
+        """
+        body: Dict[str, Any] = {"content": content}
+        if include_thinking:
+            body["include_thinking"] = True
+        return self._events(
+            self._client._stream_sse("POST", f"/chats/{chat_id}/messages/stream", json=body)
+        )
+
+    def follow_channel(
+        self,
+        chat_id: str,
+        channel_id: str,
+        *,
+        last_id: str = "0",
+        include_thinking: bool = False,
+    ) -> Iterator[StreamEvent]:
+        """Stream a turn from its channel (GET /chats/{id}/stream/{channel_id}).
+
+        Use it for the ``channel_id`` of an ``in_progress`` result, of an
+        answer (``answer()`` without ``wait``), of a tool approval, or of a
+        ``round_suspended`` event. When the round moves to another channel
+        while you follow it (its question answered elsewhere), the server
+        follows it there; the stream ends with ``"done"`` or ``"error"``,
+        or ``"done"`` ``{"status": "suspended"}`` when the round parks on a
+        question.
+
+        Args:
+            chat_id: Chat ID (UUID).
+            channel_id: The stream channel to follow.
+            last_id: Redis stream entry ID to resume after; ``"0"`` replays
+                the channel from its start.
+            include_thinking: Stream the model's thinking text.
+
+        Yields:
+            StreamEvents, as ``stream_events()``.
+        """
+        params: Dict[str, Any] = {"last_id": last_id}
+        if include_thinking:
+            params["include_thinking"] = "true"
+        return self._events(
+            self._client._stream_sse(
+                "GET", f"/chats/{chat_id}/stream/{channel_id}", params=params
+            )
+        )
+
+    @staticmethod
+    def _events(stream: Iterator["ServerSentEvent"]) -> Iterator[StreamEvent]:
+        for sse in stream:
+            if sse.event == "ping":
+                continue
+            yield _stream_event(sse)
+
+    def list_pending_inputs(self, chat_id: str) -> List[PendingInput]:
+        """List the ask_user questions a chat's turn is parked on.
+
+        Args:
+            chat_id: Chat ID (UUID).
+
+        Returns:
+            The open questions: tool_call_id, question, options, expires_at,
+            created_at. Empty when the chat waits on nothing.
+        """
+        return cast(
+            List[PendingInput], self._client._request("GET", f"/chats/{chat_id}/pending-input")
+        )
+
+    @overload
+    def answer(
+        self,
+        chat_id: str,
+        tool_call_id: str,
+        answer: str,
+        wait: Literal[False] = False,
+    ) -> PendingInputAnswerAccepted: ...
+
+    @overload
+    def answer(
+        self,
+        chat_id: str,
+        tool_call_id: str,
+        answer: str,
+        wait: Literal[True],
+    ) -> PendingInputAnswerResult: ...
+
+    @overload
+    def answer(
+        self,
+        chat_id: str,
+        tool_call_id: str,
+        answer: str,
+        wait: bool = False,
+    ) -> Union[PendingInputAnswerAccepted, PendingInputAnswerResult]: ...
+
+    def answer(
+        self,
+        chat_id: str,
+        tool_call_id: str,
+        answer: str,
+        wait: bool = False,
+    ) -> Union[PendingInputAnswerAccepted, PendingInputAnswerResult]:
+        """Answer an ask_user question; the answer becomes its tool result.
+
+        Works however the turn was started (invoke, send, a stream, a
+        queued turn).
+
+        Args:
+            chat_id: Chat ID (UUID).
+            tool_call_id: The question's ``tool_call_id`` (from
+                ``pending_inputs``, ``list_pending_inputs()`` or an
+                ``input_required`` event).
+            answer: The answer text.
+            wait: Wait for the resumed turn and return its result (Sinas
+                0.5.0+), instead of a channel to stream it from.
+
+        Returns:
+            Without ``wait``, a PendingInputAnswerAccepted: ``resumed`` (the
+            turn resumes; follow ``channel_id`` with ``follow_channel()``)
+            or not (the round still waits on other completions).
+
+            With ``wait``, a PendingInputAnswerResult shaped like an invoke
+            result: ``status``, ``reply``, ``message``, ``pending_inputs``
+            (the next question if the agent asks again), ``channel_id`` and
+            ``usage`` of the resumed turn.
+
+        Raises:
+            SinasNotFoundError: No open question with that id.
+            SinasAPIError: 409 when the question was already resolved.
+        """
+        body: Dict[str, Any] = {"answer": answer}
+        if wait:
+            body["wait"] = True
+        result = self._client._request(
+            "POST", f"/chats/{chat_id}/pending-input/{tool_call_id}", json=body
+        )
+        if wait:
+            return cast(PendingInputAnswerResult, _with_turn_state(result))
+        return cast(PendingInputAnswerAccepted, result)
+
+    def approve_tool(
+        self,
+        chat_id: str,
+        tool_call_id: str,
+        approved: bool,
+        *,
+        always_allow: bool = False,
+    ) -> ToolApprovalResult:
+        """Approve or reject a tool call that waits for approval.
+
+        The calls to decide on come from ``"approval_required"`` stream
+        events, or the chat's ``pending_approvals`` (``get()``).
+
+        Args:
+            chat_id: Chat ID (UUID).
+            tool_call_id: The tool call to decide on.
+            approved: True to run the call, False to reject it (the model
+                gets a rejection result).
+            always_allow: With ``approved``, also allow this tool for the
+                rest of the chat without asking again. Ignored when
+                rejecting.
+
+        Returns:
+            A ToolApprovalResult. ``resume == "queued"``: this was the
+            round's last decision; follow ``channel_id`` with
+            ``follow_channel()``. ``resume == "waiting"``: other calls of
+            the round still need a decision.
+        """
+        body: Dict[str, Any] = {"approved": approved}
+        if always_allow:
+            body["always_allow"] = True
+        result = self._client._request(
+            "POST", f"/chats/{chat_id}/approve-tool/{tool_call_id}", json=body
+        )
+        result.setdefault("resume", "queued")  # servers before 0.5.0 resumed on every decision
+        return cast(ToolApprovalResult, result)
 
     def get(self, chat_id: str) -> Dict[str, Any]:
         """Get a chat with all messages.

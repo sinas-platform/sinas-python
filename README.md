@@ -149,6 +149,89 @@ client.chats.update(chat["id"], title="Updated Title")
 client.chats.delete(chat["id"])
 ```
 
+### When the Agent Asks or Waits
+
+An agent with the `askUser` system tool can stop a turn to ask the user a
+question; one with `background` can wait for a background run. `invoke()` and
+`send()` say how the turn ended in `status` (Sinas 0.5.0+; against older
+servers it is always `"completed"`):
+
+| `status` | Meaning |
+|---|---|
+| `completed` | The final reply is in the response |
+| `input_required` | The agent asked; `pending_inputs` lists the questions |
+| `in_progress` | Background work outlasted the request; follow `channel_id` |
+| `injected` | The chat was busy, so the message went into the turn already there |
+
+Both also return `usage`: the LLM calls (tokens, `cost_usd`) of that request.
+
+```python
+def print_events(events):
+    """Print a turn's streamed content; return the stream's last event."""
+    last = None
+    for event in events:
+        if event.event == "message" and event.data.get("content"):
+            print(event.data["content"], end="")
+        last = event
+    return last
+
+result = client.chats.invoke("support", "triage", "Where is my order?",
+                             session_key="slack:U1")
+
+while result["status"] == "input_required":
+    question = result["pending_inputs"][0]
+    answer = input(f"{question['question']} {question['options'] or ''} ")
+    # wait=True returns the resumed turn: completed, or the next question
+    result = client.chats.answer(result["chat_id"], question["tool_call_id"],
+                                 answer, wait=True)
+
+if result["status"] == "completed":
+    print(result["reply"])
+elif result["status"] == "in_progress":
+    print_events(client.chats.follow_channel(result["chat_id"], result["channel_id"]))
+elif result["status"] == "injected":
+    # The session's chat was busy: the message went into the turn already
+    # there, which may itself wait on a question (pending_inputs) or on
+    # background work (channel_id). Nothing was answered yet.
+    print("Still working on the previous message.")
+
+# Open questions of a chat, e.g. after a restart
+client.chats.list_pending_inputs(chat_id)
+
+# Without wait, the answer returns the channel the resumed turn streams on
+accepted = client.chats.answer(chat_id, tool_call_id, "123")
+if accepted["resumed"] or accepted["resume_pending"]:
+    print_events(client.chats.follow_channel(chat_id, accepted["channel_id"]))
+```
+
+`stream_events()` streams a turn as parsed events with their names
+(`stream()` yields only the data). A question arrives as `input_required`,
+followed by `round_suspended` (with the round's `channel_id`), and the stream
+ends with `done` `{"status": "suspended"}`. A tool call that needs approval
+arrives as `approval_required`; the round resumes on the channel
+`approve_tool()` returns once every asked call is decided:
+
+```python
+resume_channel = None
+for event in client.chats.stream_events(chat_id, "Where is my order?"):
+    if event.event == "message":
+        print(event.data.get("content", ""), end="")
+    elif event.event == "input_required":
+        print("\nAgent asks:", event.data["question"])  # answer with answer()
+    elif event.event == "approval_required":
+        # Approve (optionally for the rest of the chat) or reject a tool call
+        decision = client.chats.approve_tool(
+            chat_id, event.data["tool_call_id"], True, always_allow=True
+        )
+        if decision["resume"] == "queued":  # the round's last decision
+            resume_channel = decision["channel_id"]
+    elif event.event == "done":
+        print("\n", event.data["status"])  # "completed" or "suspended"
+
+if resume_channel:
+    print_events(client.chats.follow_channel(chat_id, resume_channel))
+```
+
 ### Webhook Execution
 
 Execute webhooks by path:

@@ -1,7 +1,7 @@
 """SINAS SDK client."""
 
 import os
-from typing import Any, Dict, Iterator, Optional
+from typing import Any, Dict, Iterable, Iterator, List, NamedTuple, Optional
 
 import httpx
 
@@ -16,6 +16,48 @@ from sinas.functions import FunctionsAPI
 from sinas.state import StateAPI
 from sinas.templates import TemplatesAPI
 from sinas.webhooks import WebhooksAPI
+
+
+class ServerSentEvent(NamedTuple):
+    """One event of an SSE stream, before its data is decoded."""
+
+    event: str
+    data: str
+    id: Optional[str]
+
+
+def iter_sse(lines: Iterable[str]) -> Iterator[ServerSentEvent]:
+    """Parse the lines of a text/event-stream body into events.
+
+    Follows the SSE format: ``field: value`` lines, events separated by a
+    blank line, multi-line ``data`` joined with newlines, ``:`` comments
+    (keep-alive pings) skipped, and the event name defaulting to
+    ``"message"``. An event cut off by the end of the stream is still
+    yielded.
+    """
+    event: Optional[str] = None
+    data: List[str] = []
+    event_id: Optional[str] = None
+    for line in lines:
+        line = line.rstrip("\r\n")
+        if not line:
+            if data:
+                yield ServerSentEvent(event or "message", "\n".join(data), event_id)
+            event, data, event_id = None, [], None
+            continue
+        if line.startswith(":"):
+            continue
+        name, _, value = line.partition(":")
+        if value.startswith(" "):
+            value = value[1:]
+        if name == "data":
+            data.append(value)
+        elif name == "event":
+            event = value
+        elif name == "id":
+            event_id = value
+    if data:
+        yield ServerSentEvent(event or "message", "\n".join(data), event_id)
 
 
 class SinasClient:
@@ -183,6 +225,38 @@ class SinasClient:
                 for line in response.iter_lines():
                     if line.startswith("data: "):
                         yield line[6:]
+        except httpx.HTTPError as e:
+            raise SinasAPIError(f"HTTP streaming request failed: {e}")
+
+    def _stream_sse(
+        self,
+        method: str,
+        path: str,
+        json: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Iterator[ServerSentEvent]:
+        """Make a streaming request and yield its server-sent events, event
+        names included (``_stream`` yields only the data lines).
+
+        Raises:
+            SinasAPIError: If the request fails.
+        """
+        url = f"{self.base_url}{path}"
+        headers = self._get_headers()
+        headers["Accept"] = "text/event-stream"
+
+        try:
+            with self._client.stream(
+                method=method,
+                url=url,
+                json=json,
+                params=params,
+                headers=headers,
+            ) as response:
+                if not response.is_success:
+                    response.read()  # so the error's detail can be decoded
+                self._handle_response(response)
+                yield from iter_sse(response.iter_lines())
         except httpx.HTTPError as e:
             raise SinasAPIError(f"HTTP streaming request failed: {e}")
 

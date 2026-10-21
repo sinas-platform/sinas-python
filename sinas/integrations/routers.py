@@ -5,7 +5,7 @@ Each router handles authentication automatically and forwards requests to the ba
 """
 
 import asyncio
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 try:
     from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -197,7 +197,10 @@ def create_chat_router(base_url: str, prefix: str = "") -> APIRouter:
     ) -> Dict[str, Any]:
         """Send a message to a chat."""
         body = await request.json()
-        return await asyncio.to_thread(client.chats.send, chat_id, body["content"])
+        result = await asyncio.to_thread(client.chats.send, chat_id, body["content"])
+        # send() returns a MessageSendResult TypedDict; the route keeps its plain
+        # Dict response type so FastAPI passes every field through unfiltered.
+        return cast(Dict[str, Any], result)
 
     @router.post(f"{prefix}/{{chat_id}}/messages/stream")
     async def stream_message(
