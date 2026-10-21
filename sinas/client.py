@@ -117,6 +117,23 @@ class SinasClient:
         Raises:
             SinasAPIError: If the request fails.
         """
+        response = self._request_response(method, path, json=json, params=params)
+        if response.status_code == 204:
+            return None
+        return response.json()
+
+    def _request_response(
+        self,
+        method: str,
+        path: str,
+        json: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> httpx.Response:
+        """Like _request, but return the response itself (for its headers).
+
+        Raises:
+            SinasAPIError: If the request fails.
+        """
         url = f"{self.base_url}{path}"
         headers = self._get_headers()
 
@@ -128,14 +145,10 @@ class SinasClient:
                 params=params,
                 headers=headers,
             )
-            self._handle_response(response)
-
-            if response.status_code == 204:
-                return None
-
-            return response.json()
         except httpx.HTTPError as e:
             raise SinasAPIError(f"HTTP request failed: {e}")
+        self._handle_response(response)
+        return response
 
     def _stream(
         self,

@@ -8,7 +8,7 @@ import asyncio
 from typing import Any, Dict, List, Optional
 
 try:
-    from fastapi import APIRouter, Depends, HTTPException, Request
+    from fastapi import APIRouter, Depends, HTTPException, Request, Response
     from fastapi.responses import JSONResponse, StreamingResponse
     from fastapi.routing import APIRoute
     from pydantic import BaseModel, EmailStr
@@ -220,10 +220,26 @@ def create_chat_router(base_url: str, prefix: str = "") -> APIRouter:
 
     @router.get(prefix or "")
     async def list_chats(
-        client: SinasClient = Depends(auth)
+        response: Response,
+        include_archived: bool = False,
+        q: Optional[str] = None,
+        limit: Optional[int] = None,
+        cursor: Optional[str] = None,
+        client: SinasClient = Depends(auth),
     ) -> List[Dict[str, Any]]:
-        """List all chats for the current user."""
-        return await asyncio.to_thread(client.chats.list)
+        """List the current user's chats, most recently updated first.
+
+        Passes `limit`/`cursor` through and returns the backend's
+        X-Next-Cursor (and X-Truncated) headers, so clients can page.
+        """
+        page = await asyncio.to_thread(
+            client.chats._get_page, include_archived, q, limit, cursor
+        )
+        if page.next_cursor:
+            response.headers["X-Next-Cursor"] = page.next_cursor
+        if page.truncated:
+            response.headers["X-Truncated"] = "true"
+        return page.chats
 
     @router.get(f"{prefix}/{{chat_id}}")
     async def get_chat(

@@ -136,8 +136,11 @@ for chunk in client.chats.stream(
 chat_data = client.chats.get(chat["id"])
 messages = chat_data["messages"]
 
-# List all chats
-chats = client.chats.list()
+# List chats: one page at a time, or every chat (follows X-Next-Cursor)
+page = client.chats.list_page(limit=50)          # page.chats, page.next_cursor
+more = client.chats.list_page(limit=50, cursor=page.next_cursor)
+for listed_chat in client.chats.iter_all():
+    print(listed_chat["title"])
 
 # Update chat
 client.chats.update(chat["id"], title="Updated Title")
@@ -452,7 +455,10 @@ except SinasAPIError as e:
 - `send(chat_id, content)` - Send message (blocking)
 - `stream(chat_id, content)` - Send message (streaming SSE)
 - `get(chat_id)` - Get chat with messages
-- `list()` - List user's chats
+- `list(include_archived?, q?, limit?, cursor?)` - List user's chats; without `limit`/`cursor` the
+  server returns at most its CHATS_UNPAGINATED_MAX (10,000 by default) and warns when it cut the list
+- `list_page(include_archived?, q?, limit=50, cursor?)` - One page as a `ChatPage` (`chats`, `next_cursor`, `truncated`)
+- `iter_all(include_archived?, q?, page_size=200)` - Iterate over every chat, following `X-Next-Cursor`
 - `update(chat_id, title?)` - Update chat
 - `delete(chat_id)` - Delete chat
 

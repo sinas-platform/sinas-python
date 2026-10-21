@@ -1,9 +1,33 @@
 """Runtime Chats API."""
 
-from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Union
+import warnings
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Set, Union
+
+from sinas.exceptions import SinasAPIError
 
 if TYPE_CHECKING:
     from sinas.client import SinasClient
+
+# The largest page GET /chats serves.
+CHATS_PAGE_MAX = 200
+
+
+@dataclass
+class ChatPage:
+    """One response of GET /chats.
+
+    Attributes:
+        chats: The chats, most recently updated first.
+        next_cursor: Pass as ``cursor`` to get the chats after these; None on
+            the last page (and from servers that do not paginate).
+        truncated: The server cut an unpaginated list short (more chats than
+            its CHATS_UNPAGINATED_MAX); ``next_cursor`` continues it.
+    """
+
+    chats: List[Dict[str, Any]] = field(default_factory=list)
+    next_cursor: Optional[str] = None
+    truncated: bool = False
 
 
 class ChatsAPI:
@@ -136,17 +160,130 @@ class ChatsAPI:
         """
         return self._client._request("GET", f"/chats/{chat_id}")
 
-    def list(self, include_archived: bool = False) -> List[Dict[str, Any]]:
-        """List all chats for the current user.
+    def list(
+        self,
+        include_archived: bool = False,
+        *,
+        q: Optional[str] = None,
+        limit: Optional[int] = None,
+        cursor: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """List the current user's chats, most recently updated first.
+
+        Without ``limit`` or ``cursor`` this asks for every chat in one
+        response, as before. Servers cap that list (CHATS_UNPAGINATED_MAX,
+        10,000 by default): past the cap you get the first ones and a
+        ``UserWarning``. Use ``iter_all()`` to go through every chat, or
+        ``list_page()`` to page yourself.
 
         Args:
             include_archived: If True, include archived (soft-deleted) chats.
+            q: Only chats whose title contains this text (case-insensitive).
+            limit: Page size (1-200). Giving ``limit`` or ``cursor`` returns
+                one page.
+            cursor: A page's ``next_cursor``, to get the chats after it.
 
         Returns:
             List of chats.
         """
-        params = {"include_archived": "true"} if include_archived else {}
-        return self._client._request("GET", "/chats", params=params)
+        page = self._get_page(include_archived, q, limit, cursor)
+        if page.truncated:
+            warnings.warn(
+                "GET /chats returned only the first "
+                f"{len(page.chats)} chats (the server's cap on an unpaginated list); "
+                "use client.chats.iter_all() to get them all",
+                UserWarning,
+                stacklevel=2,
+            )
+        return page.chats
+
+    def list_page(
+        self,
+        include_archived: bool = False,
+        *,
+        q: Optional[str] = None,
+        limit: int = 50,
+        cursor: Optional[str] = None,
+    ) -> ChatPage:
+        """Get one page of the current user's chats, with the cursor for the next.
+
+        Args:
+            include_archived: If True, include archived (soft-deleted) chats.
+            q: Only chats whose title contains this text (case-insensitive).
+            limit: Page size (1-200).
+            cursor: The previous page's ``next_cursor``; None for the first page.
+
+        Returns:
+            A ChatPage. Its ``next_cursor`` is None on the last page. A server
+            that predates pagination ignores ``limit`` and returns every chat
+            in one page without a cursor.
+        """
+        return self._get_page(include_archived, q, limit, cursor)
+
+    def iter_all(
+        self,
+        include_archived: bool = False,
+        *,
+        q: Optional[str] = None,
+        page_size: int = CHATS_PAGE_MAX,
+    ) -> Iterator[Dict[str, Any]]:
+        """Iterate over all of the current user's chats, a page at a time.
+
+        Follows the server's ``X-Next-Cursor`` until the last page. Against a
+        server that predates pagination, the first response holds every chat
+        and carries no cursor, so this yields them all and stops.
+
+        Chats created or updated while iterating move to the front of the
+        list: the rest are neither repeated nor skipped, and the moved ones
+        are not yielded again.
+
+        Args:
+            include_archived: If True, include archived (soft-deleted) chats.
+            q: Only chats whose title contains this text (case-insensitive).
+            page_size: Chats per request (1-200).
+
+        Yields:
+            Chats, most recently updated first.
+        """
+        cursor: Optional[str] = None
+        # Every cursor followed so far: a server that hands back any earlier
+        # cursor (the same one, or a cycle such as A -> B -> A) would
+        # otherwise make this loop forever.
+        seen: Set[str] = set()
+        while True:
+            page = self._get_page(include_archived, q, page_size, cursor)
+            yield from page.chats
+            if not page.next_cursor:
+                return
+            if page.next_cursor in seen:
+                raise SinasAPIError(
+                    f"GET /chats returned cursor {page.next_cursor!r} again; stopping"
+                )
+            seen.add(page.next_cursor)
+            cursor = page.next_cursor
+
+    def _get_page(
+        self,
+        include_archived: bool,
+        q: Optional[str],
+        limit: Optional[int],
+        cursor: Optional[str],
+    ) -> ChatPage:
+        params: Dict[str, Any] = {}
+        if include_archived:
+            params["include_archived"] = "true"
+        if q is not None:
+            params["q"] = q
+        if limit is not None:
+            params["limit"] = limit
+        if cursor is not None:
+            params["cursor"] = cursor
+        response = self._client._request_response("GET", "/chats", params=params)
+        return ChatPage(
+            chats=response.json(),
+            next_cursor=response.headers.get("x-next-cursor") or None,
+            truncated=response.headers.get("x-truncated", "").lower() == "true",
+        )
 
     def update(
         self,

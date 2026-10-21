@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Chat list pagination.** `client.chats.list()` takes `q`, `limit` and
+  `cursor`; with `limit` or `cursor` it returns one page.
+  - `client.chats.list_page(limit=50, cursor=None, ...)` returns a `ChatPage`
+    (`chats`, `next_cursor`, `truncated`), the cursor taken from the server's
+    `X-Next-Cursor` header.
+  - `client.chats.iter_all(page_size=200, ...)` iterates over every chat,
+    following `X-Next-Cursor`. Against a server from before pagination, the
+    first response holds every chat without a cursor, so it yields them all
+    and stops.
+  - The FastAPI chat router's list endpoint passes `include_archived`, `q`,
+    `limit` and `cursor` through and returns `X-Next-Cursor`/`X-Truncated`.
+
+### Changed
+
+- Sinas 0.5.0 caps `GET /chats` without `limit` or `cursor` at
+  `CHATS_UNPAGINATED_MAX` (10,000 by default). `client.chats.list()` without
+  them still makes that request, and now emits a `UserWarning` when the
+  server says it cut the list short (`X-Truncated: true`). Use `iter_all()`
+  to get every chat.
+
 ## [0.2.0] - 2026-05-15
 
 ### Added
