@@ -139,8 +139,8 @@ messages = chat_data["messages"]
 # List chats: one page at a time, or every chat (follows X-Next-Cursor)
 page = client.chats.list_page(limit=50)          # page.chats, page.next_cursor
 more = client.chats.list_page(limit=50, cursor=page.next_cursor)
-for chat in client.chats.iter_all():
-    print(chat["title"])
+for listed_chat in client.chats.iter_all():
+    print(listed_chat["title"])
 
 # Update chat
 client.chats.update(chat["id"], title="Updated Title")
