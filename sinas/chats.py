@@ -2,7 +2,7 @@
 
 import warnings
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Set, Union
 
 from sinas.exceptions import SinasAPIError
 
@@ -246,13 +246,20 @@ class ChatsAPI:
             Chats, most recently updated first.
         """
         cursor: Optional[str] = None
+        # Every cursor followed so far: a server that hands back any earlier
+        # cursor (the same one, or a cycle such as A -> B -> A) would
+        # otherwise make this loop forever.
+        seen: Set[str] = set()
         while True:
             page = self._get_page(include_archived, q, page_size, cursor)
             yield from page.chats
             if not page.next_cursor:
                 return
-            if page.next_cursor == cursor:
-                raise SinasAPIError("GET /chats returned the same cursor twice; stopping")
+            if page.next_cursor in seen:
+                raise SinasAPIError(
+                    f"GET /chats returned cursor {page.next_cursor!r} again; stopping"
+                )
+            seen.add(page.next_cursor)
             cursor = page.next_cursor
 
     def _get_page(

@@ -89,8 +89,34 @@ def test_iter_all_stops_on_a_repeated_cursor():
         return httpx.Response(200, json=[{"id": "x"}], headers={"X-Next-Cursor": "same"})
 
     client = _client(handler)
-    with pytest.raises(SinasAPIError, match="same cursor"):
+    with pytest.raises(SinasAPIError, match="'same' again"):
         list(client.chats.iter_all())
+
+
+def test_iter_all_stops_on_a_cursor_cycle():
+    """A server alternating between two cursors (A -> B -> A) must not loop forever."""
+    requests = []
+    pages = {
+        None: ([{"id": "c0"}], "A"),
+        "A": ([{"id": "c1"}], "B"),
+        "B": ([{"id": "c2"}], "A"),
+    }
+
+    def handler(request):
+        cursor = request.url.params.get("cursor")
+        requests.append(cursor)
+        if len(requests) > 10:  # keep a regression from hanging the suite
+            raise AssertionError("iter_all kept following a cursor cycle")
+        body, next_cursor = pages[cursor]
+        return httpx.Response(200, json=body, headers={"X-Next-Cursor": next_cursor})
+
+    client = _client(handler)
+    seen = []
+    with pytest.raises(SinasAPIError, match="'A' again"):
+        for chat in client.chats.iter_all():
+            seen.append(chat["id"])
+    assert seen == ["c0", "c1", "c2"]
+    assert requests == [None, "A", "B"]
 
 
 def test_list_page_returns_the_cursor():
