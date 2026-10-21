@@ -4,7 +4,7 @@ For sync execution use `client.executions` after polling; for fire-and-forget
 async execution use `client.functions.enqueue(...)`.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
     from sinas.client import SinasClient
@@ -64,7 +64,7 @@ class FunctionsAPI:
         self,
         namespace: str,
         name: str,
-        inputs: list[Dict[str, Any]],
+        inputs: List[Dict[str, Any]],
         *,
         trigger_id_prefix: Optional[str] = None,
         delay_seconds: Optional[int] = None,
