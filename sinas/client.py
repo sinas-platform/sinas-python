@@ -5,11 +5,14 @@ from typing import Any, Dict, Iterator, Optional
 
 import httpx
 
+from sinas.agents import AgentsAPI
 from sinas.auth import AuthAPI
+from sinas.batches import BatchesAPI
 from sinas.chats import ChatsAPI
 from sinas.executions import ExecutionsAPI
 from sinas.exceptions import SinasAPIError, SinasAuthError, SinasNotFoundError, SinasValidationError
 from sinas.files import FilesAPI
+from sinas.functions import FunctionsAPI
 from sinas.state import StateAPI
 from sinas.templates import TemplatesAPI
 from sinas.webhooks import WebhooksAPI
@@ -24,14 +27,29 @@ class SinasClient:
         api_key: Optional[str] = None,
         token: Optional[str] = None,
         timeout: float = 30.0,
+        use_env: bool = True,
     ) -> None:
         """Initialize SINAS Runtime client.
 
         Args:
             base_url: Base URL for SINAS API. Defaults to SINAS_BASE_URL env var.
-            api_key: API key for authentication. Defaults to SINAS_API_KEY env var.
-            token: JWT token for authentication. Defaults to SINAS_TOKEN env var.
+            api_key: API key for authentication. Defaults to SINAS_API_KEY env var
+                (unless use_env=False).
+            token: JWT token for authentication. Defaults to SINAS_TOKEN env var
+                (unless use_env=False).
             timeout: Request timeout in seconds.
+            use_env: Whether missing credentials may fall back to the
+                SINAS_API_KEY / SINAS_TOKEN environment variables. Pass False to
+                build a client that is guaranteed to carry NO ambient
+                credentials.
+
+                This matters for server-side consumers. A process that sets
+                SINAS_API_KEY for its own background work would otherwise have
+                every request-scoped client built without a token silently
+                inherit that service key — so a caller who presented no
+                credentials gets answered as the service account. Any client
+                representing an end user (or no user at all) should be built
+                with use_env=False.
         """
         self.base_url = (base_url or os.getenv("SINAS_BASE_URL", "")).rstrip("/")
         if not self.base_url:
@@ -39,8 +57,8 @@ class SinasClient:
                 "base_url must be provided or SINAS_BASE_URL environment variable must be set"
             )
 
-        self._api_key = api_key or os.getenv("SINAS_API_KEY")
-        self._token = token or os.getenv("SINAS_TOKEN")
+        self._api_key = api_key or (os.getenv("SINAS_API_KEY") if use_env else None)
+        self._token = token or (os.getenv("SINAS_TOKEN") if use_env else None)
         self._timeout = timeout
 
         self._client = httpx.Client(timeout=timeout)
@@ -51,6 +69,9 @@ class SinasClient:
         self.chats = ChatsAPI(self)
         self.webhooks = WebhooksAPI(self)
         self.executions = ExecutionsAPI(self)
+        self.functions = FunctionsAPI(self)
+        self.agents = AgentsAPI(self)
+        self.batches = BatchesAPI(self)
         self.templates = TemplatesAPI(self)
         self.files = FilesAPI(self)
 

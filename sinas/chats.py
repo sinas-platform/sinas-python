@@ -12,6 +12,45 @@ class ChatsAPI:
     def __init__(self, client: "SinasClient") -> None:
         self._client = client
 
+    def invoke(
+        self,
+        namespace: str,
+        agent_name: str,
+        message: Union[str, List[Dict[str, Any]]],
+        session_key: Optional[str] = None,
+        reset: bool = False,
+        input: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Invoke an agent synchronously — send a message, get a reply.
+
+        Combines chat creation and message sending into a single request/response.
+        Use session_key for conversation continuity across multiple calls.
+
+        Args:
+            namespace: Agent namespace.
+            agent_name: Agent name.
+            message: Message to send (string or list of content blocks).
+            session_key: Optional key for conversation continuity (e.g., Slack channel ID).
+            reset: If True, archive the existing session and start fresh.
+            input: Optional agent input variables (only used when creating a new chat).
+
+        Returns:
+            Dict with reply, chat_id, session_key, and usage.
+        """
+        data: Dict[str, Any] = {"message": message}
+        if session_key is not None:
+            data["session_key"] = session_key
+        if reset:
+            data["reset"] = True
+        if input is not None:
+            data["input"] = input
+
+        return self._client._request(
+            "POST",
+            f"/agents/{namespace}/{agent_name}/invoke",
+            json=data,
+        )
+
     def create(
         self,
         namespace: str,

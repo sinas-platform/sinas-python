@@ -5,6 +5,54 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-05-15
+
+### Added
+
+- **Bulk submission for functions and agents.** Apps doing N-at-a-time work
+  (ingestion runs, dossier scans) can submit one batch and track aggregate
+  progress without a per-item worker loop.
+  - `client.functions.submit_batch(namespace, name, inputs, ...)` — submit
+    N function executions as one batch. Returns
+    `{batch_id, execution_ids, total, status}`.
+  - `client.agents.submit_batch(namespace, name, inputs, ...)` — submit N
+    fresh agent chats as one batch. Each input is
+    `{input_variables, message}`. Returns
+    `{batch_id, execution_ids, chat_ids, total, status}`.
+  - `client.batches.get(batch_id)` — aggregate status + per-status counts.
+  - `client.batches.list_executions(batch_id, status=..., limit=..., offset=...)`
+    — drill into child executions.
+  - `client.batches.cancel(batch_id)` — cancel any queued/pending children.
+- **`client.functions.enqueue(...)`** — fire-and-forget async function call
+  with optional `trigger_id`, `delay_seconds`, and `callback_url`.
+- **Optional `callback_url` on submissions** — Sinas POSTs once per
+  execution termination (success/failure/timeout) and optionally once per
+  batch terminus via `batch_callback_url`. Callbacks carry a fresh
+  short-lived access token for the originating user so downstream apps can
+  validate via the standard auth path. Fire-and-forget; polling is the
+  resilience fallback.
+
+### Changed
+
+- Per-execution access tokens are now bounded by the function's `timeout`
+  plus a 5-minute buffer (capped at 24h), instead of the prior fixed 15-min
+  TTL. Most functions now get *shorter* tokens; long-running functions get
+  tokens that outlive the execution. No caller-side change required.
+
+See ADR `sinas/backend/docs/adrs/2026-05-14-external-app-bulk-enqueue.md`.
+
+## [0.1.8] - 2026-04-29
+
+### Added
+
+- `ChatsAPI.invoke()` — synchronous agent invocation combining chat creation
+  and message sending in one request. Supports `session_key` for conversation
+  continuity across calls, plus `reset` to archive an existing session and
+  start fresh, and an optional `input` payload for agent input variables.
+- `update_existing` parameter on `FilesAPI.upload()`, `upload_bytes()`, and
+  `upload_from_path()`. When true, an existing file with the same name is
+  overwritten as a new version instead of being auto-renamed.
+
 ## [0.1.5] - 2026-02-04
 
 ### Fixed

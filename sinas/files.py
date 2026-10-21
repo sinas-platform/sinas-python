@@ -24,6 +24,7 @@ class FilesAPI:
         content_type: str,
         visibility: str = "private",
         file_metadata: Optional[Dict[str, Any]] = None,
+        update_existing: bool = False,
     ) -> Dict[str, Any]:
         """Upload a file.
 
@@ -35,6 +36,8 @@ class FilesAPI:
             content_type: MIME type of the file.
             visibility: Visibility level ("private", "group", "public"). Defaults to "private".
             file_metadata: Optional metadata dict to attach to the file.
+            update_existing: If True, overwrite existing file as a new version
+                instead of auto-renaming. Defaults to False.
 
         Returns:
             File info.
@@ -44,6 +47,7 @@ class FilesAPI:
             "content_base64": content_base64,
             "content_type": content_type,
             "visibility": visibility,
+            "update_existing": update_existing,
         }
         if file_metadata is not None:
             data["file_metadata"] = file_metadata
@@ -59,6 +63,7 @@ class FilesAPI:
         content_type: str,
         visibility: str = "private",
         file_metadata: Optional[Dict[str, Any]] = None,
+        update_existing: bool = False,
     ) -> Dict[str, Any]:
         """Upload a file from bytes.
 
@@ -72,6 +77,7 @@ class FilesAPI:
             content_type: MIME type of the file.
             visibility: Visibility level. Defaults to "private".
             file_metadata: Optional metadata dict.
+            update_existing: If True, overwrite existing file as a new version.
 
         Returns:
             File info.
@@ -85,6 +91,7 @@ class FilesAPI:
             content_type=content_type,
             visibility=visibility,
             file_metadata=file_metadata,
+            update_existing=update_existing,
         )
 
     def upload_from_path(
@@ -96,6 +103,7 @@ class FilesAPI:
         content_type: Optional[str] = None,
         visibility: str = "private",
         file_metadata: Optional[Dict[str, Any]] = None,
+        update_existing: bool = False,
     ) -> Dict[str, Any]:
         """Upload a file from a local file path.
 
@@ -109,6 +117,7 @@ class FilesAPI:
             content_type: MIME type. Guessed from file extension if not provided.
             visibility: Visibility level. Defaults to "private".
             file_metadata: Optional metadata dict.
+            update_existing: If True, overwrite existing file as a new version.
 
         Returns:
             File info.
@@ -127,6 +136,7 @@ class FilesAPI:
             content_type=content_type,
             visibility=visibility,
             file_metadata=file_metadata,
+            update_existing=update_existing,
         )
 
     def download(

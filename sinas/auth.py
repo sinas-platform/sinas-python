@@ -1,6 +1,6 @@
 """Runtime Authentication API."""
 
-from typing import TYPE_CHECKING, Any, Dict, List, Literal
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 if TYPE_CHECKING:
     from sinas.client import SinasClient
@@ -12,17 +12,32 @@ class AuthAPI:
     def __init__(self, client: "SinasClient") -> None:
         self._client = client
 
-    def login(self, email: str) -> Dict[str, Any]:
-        """Initiate login by sending OTP to email.
+    def login(
+        self, email: str, password: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Initiate login. Shape of the response depends on the deployment's
+        AUTH_MODE:
+
+        - ``otp``: send `email` only. Response carries `session_id`; call
+          `verify_otp` next.
+        - ``password``: send `email` + `password`. Response carries
+          `access_token` and `refresh_token` directly.
+        - ``password+otp``: send `email` + `password`. Response carries
+          `session_id`; call `verify_otp` next.
 
         Args:
             email: User's email address.
+            password: Optional password (required in password / password+otp modes).
 
         Returns:
-            Login response with message and session_id.
-            Example: {"message": "OTP sent to your email", "session_id": "uuid-here"}
+            Either ``{"message": ..., "session_id": ...}`` (OTP follows) or
+            ``{"access_token": ..., "refresh_token": ..., ...}`` (already
+            logged in), depending on the server's auth mode.
         """
-        return self._client._request("POST", "/auth/login", json={"email": email})
+        body: Dict[str, Any] = {"email": email}
+        if password is not None:
+            body["password"] = password
+        return self._client._request("POST", "/auth/login", json=body)
 
     def verify_otp(self, session_id: str, otp_code: str) -> Dict[str, Any]:
         """Verify OTP and get access + refresh tokens.

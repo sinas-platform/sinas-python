@@ -48,9 +48,11 @@ from sinas import SinasAPIError, SinasAuthError, SinasClient
 
 
 class LoginRequest(BaseModel):
-    """Login request body."""
+    """Login request body. `password` is required for instances running in
+    `password` or `password+otp` auth modes; ignored otherwise."""
 
     email: EmailStr
+    password: Optional[str] = None
 
 
 class VerifyOTPRequest(BaseModel):
@@ -126,13 +128,21 @@ class SinasAuth:
                     detail="Missing authentication credentials",
                     headers={"WWW-Authenticate": "Bearer"},
                 )
-            # Return unauthenticated client
-            return SinasClient(base_url=self.base_url)
+            # Return a genuinely unauthenticated client. use_env=False is
+            # load-bearing: without it, a consumer that sets SINAS_API_KEY for
+            # its own background work would have this "unauthenticated" client
+            # pick up that service key, and an anonymous caller would be
+            # answered as the service account (e.g. GET /me returning the
+            # service identity, so a frontend renders a logged-in session for
+            # a visitor who never authenticated).
+            return SinasClient(base_url=self.base_url, use_env=False)
 
         token = credentials.credentials
 
         # Create client with user's token
-        client = SinasClient(base_url=self.base_url, token=token)
+        # use_env=False so a user-scoped client carries the caller's token and
+        # nothing else — never the process's ambient service credentials.
+        client = SinasClient(base_url=self.base_url, token=token, use_env=False)
 
         # Optionally validate token by fetching user info
         # This adds one extra request but ensures the token is valid
@@ -250,14 +260,19 @@ class SinasAuth:
         """
         router = APIRouter(tags=["authentication"])
 
-        # Unauthenticated client for login/verify
-        base_client = SinasClient(base_url=self.base_url)
+        # Unauthenticated client for login/verify — these are pre-auth routes,
+        # so it must carry no ambient credentials either (see use_env above).
+        base_client = SinasClient(base_url=self.base_url, use_env=False)
 
         @router.post("/login")
         async def login(request: LoginRequest) -> Dict[str, Any]:
-            """Initiate login by sending OTP to email."""
+            """Initiate login. Forwards `email` (and `password`, if supplied)
+            to the upstream Sinas instance. The response shape varies by the
+            instance's AUTH_MODE — see `AuthAPI.login` docstring."""
             try:
-                return await asyncio.to_thread(base_client.auth.login, request.email)
+                return await asyncio.to_thread(
+                    base_client.auth.login, request.email, request.password
+                )
             except SinasAPIError as e:
                 raise HTTPException(
                     status_code=e.status_code or status.HTTP_500_INTERNAL_SERVER_ERROR,

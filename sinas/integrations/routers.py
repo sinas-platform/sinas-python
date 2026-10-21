@@ -438,7 +438,9 @@ def create_files_router(base_url: str, prefix: str = "") -> APIRouter:
         """Serve a file by token (unauthenticated)."""
         from fastapi.responses import Response
 
-        client = SinasClient(base_url=base_url)
+        # Anonymous route: the file token is the only credential, so the
+        # client must not pick up the process's SINAS_API_KEY / SINAS_TOKEN.
+        client = SinasClient(base_url=base_url, use_env=False)
         try:
             result = await asyncio.to_thread(client.files.serve, token)
             return Response(
